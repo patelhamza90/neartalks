@@ -7,17 +7,20 @@ import { getGeolocation, haversineDistance } from '../../utils/geolocation';
 import JoinGroupModal from './JoinGroupModal';
 import SearchBar from '../ui/SearchBar';
 
-const RADIUS_KM = 5;
+const RADIUS_DEFAULT = 5;
+const RADIUS_EXPANDED = 10;
 
 export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
   const { user } = useAuth();
-  const [groups, setGroups] = useState([]);
+  const [allGroups, setAllGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [locationStatus, setLocationStatus] = useState('loading');
   const [userLoc, setUserLoc] = useState(null);
   const [joinTarget, setJoinTarget] = useState(null);
   const [joinedIds, setJoinedIds] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [radius, setRadius] = useState(RADIUS_DEFAULT);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     initLocation();
@@ -40,17 +43,17 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
       setJoinedIds(joined);
 
       const snap = await getDocs(collection(db, 'groups'));
-      const all = snap.docs.map((d) => {
+      const parsed = snap.docs.map((d) => {
         const data = d.data();
 
-        // Safely parse lat/lng — skip group if either is missing/invalid
         const lat = parseFloat(data.latitude);
         const lng = parseFloat(data.longitude);
         if (isNaN(lat) || isNaN(lng) || data.latitude === null || data.longitude === null) return null;
 
         let distance = null;
         if (loc && loc.latitude !== 0 && loc.longitude !== 0) {
-          distance = haversineDistance(loc.latitude, loc.longitude, lat, lng);
+          const raw = haversineDistance(loc.latitude, loc.longitude, lat, lng);
+          distance = raw !== null ? Math.round(raw * 10) / 10 : null;
         }
 
         return {
@@ -64,15 +67,7 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
         };
       }).filter(Boolean);
 
-      const nearby = all
-        .filter((g) => {
-          if (!loc || loc.latitude === 0) return true;
-          if (g.distance === null) return false;
-          return g.distance <= RADIUS_KM;
-        })
-        .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
-
-      setGroups(nearby);
+      setAllGroups(parsed.sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity)));
     } catch (e) {
       console.error(e);
     } finally {
@@ -80,9 +75,30 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
     }
   };
 
+  const handleExpand = () => {
+    setRadius(RADIUS_EXPANDED);
+    setExpanded(true);
+  };
+
+  const withinRadius = (g, r) => {
+    if (!userLoc || userLoc.latitude === 0) return true;
+    if (g.distance === null) return false;
+    return g.distance <= r;
+  };
+
+  const groupsInDefault = allGroups.filter((g) => withinRadius(g, RADIUS_DEFAULT));
+  const groupsInExpanded = allGroups.filter((g) => withinRadius(g, RADIUS_EXPANDED));
+  const activeGroups = expanded ? groupsInExpanded : groupsInDefault;
+
+  const showExpandButton =
+    !expanded &&
+    groupsInDefault.length === 0 &&
+    groupsInExpanded.length > 0 &&
+    userLoc && userLoc.latitude !== 0;
+
   const filteredGroups = searchQuery.trim()
-    ? groups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : groups;
+    ? activeGroups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : activeGroups;
 
   const handleJoinSuccess = (group, nickname) => {
     setJoinTarget(null);
@@ -96,7 +112,7 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
           <h2 className="text-xl font-bold text-gray-800">Discover Groups</h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {locationStatus === 'success' && userLoc
-              ? `Within ${RADIUS_KM}km${userLoc.isIPBased ? ' (approx)' : ''}`
+              ? `Within ${radius}km${userLoc.isIPBased ? ' (approx)' : ''}`
               : locationStatus === 'loading'
               ? 'Getting location...'
               : 'Location unavailable'}
@@ -121,53 +137,87 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
           <div className="flex items-center justify-center h-40">
             <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        ) : filteredGroups.length === 0 ? (
-          <div className="text-center text-gray-400 mt-20 px-6">
-            <div className="text-4xl mb-3">{searchQuery ? '🔍' : '🏙️'}</div>
-            <p className="font-medium text-gray-600">
-              {searchQuery ? `No groups matching "${searchQuery}"` : 'No groups nearby'}
-            </p>
-            <p className="text-sm mt-1">
-              {searchQuery ? 'Try a different search term' : 'Be the first to create one!'}
-            </p>
-          </div>
         ) : (
-          <div className="divide-y divide-gray-100">
-            {filteredGroups.map((group) => {
-              const isJoined = joinedIds.has(group.id);
-              return (
-                <div key={group.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 transition">
-                  <img
-                    src={group.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${group.id}`}
-                    alt=""
-                    className="w-12 h-12 rounded-full bg-gray-100 flex-shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-semibold text-gray-800 truncate">
-                        {searchQuery ? highlightMatch(group.name, searchQuery) : group.name}
-                      </p>
-                      {group.distance !== null && group.distance !== undefined && (
-                        <span className="text-xs text-gray-400 flex-shrink-0">{group.distance.toFixed(1)} km</span>
-                      )}
+          <>
+            {filteredGroups.length === 0 && !showExpandButton && (
+              <div className="text-center text-gray-400 mt-20 px-6">
+                <div className="text-4xl mb-3">{searchQuery ? '🔍' : '🏙️'}</div>
+                <p className="font-medium text-gray-600">
+                  {searchQuery ? `No groups matching "${searchQuery}"` : 'No groups nearby'}
+                </p>
+                <p className="text-sm mt-1">
+                  {searchQuery ? 'Try a different search term' : 'Be the first to create one!'}
+                </p>
+              </div>
+            )}
+
+            {showExpandButton && (
+              <div className="flex flex-col items-center mt-20 px-6 gap-4">
+                <div className="text-4xl">📡</div>
+                <p className="font-medium text-gray-600 text-center">No groups found within 5 km</p>
+                <p className="text-sm text-gray-400 text-center">There may be groups a bit further away.</p>
+                <button
+                  onClick={handleExpand}
+                  className="mt-2 text-sm font-semibold text-blue-600 border border-blue-300 bg-blue-50 hover:bg-blue-100 px-5 py-2.5 rounded-xl transition"
+                >
+                  Expand Search to 10 KM
+                </button>
+              </div>
+            )}
+
+            {expanded && filteredGroups.length === 0 && !searchQuery && (
+              <div className="text-center text-gray-400 mt-20 px-6">
+                <div className="text-4xl mb-3">🏙️</div>
+                <p className="font-medium text-gray-600">No groups within 10 km</p>
+                <p className="text-sm mt-1">Be the first to create one!</p>
+              </div>
+            )}
+
+            {expanded && groupsInExpanded.length > 0 && !searchQuery && (
+              <div className="px-4 py-2 bg-blue-50 border-b border-blue-100">
+                <p className="text-xs text-blue-600 font-medium text-center">Showing results within 10 KM</p>
+              </div>
+            )}
+
+            {filteredGroups.length > 0 && (
+              <div className="divide-y divide-gray-100">
+                {filteredGroups.map((group) => {
+                  const isJoined = joinedIds.has(group.id);
+                  return (
+                    <div key={group.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 transition">
+                      <img
+                        src={group.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${group.id}`}
+                        alt=""
+                        className="w-12 h-12 rounded-full bg-gray-100 flex-shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-gray-800 truncate">
+                            {searchQuery ? highlightMatch(group.name, searchQuery) : group.name}
+                          </p>
+                          {group.distance !== null && group.distance !== undefined && (
+                            <span className="text-xs text-gray-400 flex-shrink-0">{group.distance.toFixed(1)} km</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => !isJoined && setJoinTarget(group)}
+                        disabled={isJoined}
+                        className={`flex-shrink-0 text-sm font-semibold px-4 py-2 rounded-xl transition ${
+                          isJoined ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'
+                        }`}
+                      >
+                        {isJoined ? 'Joined' : 'Join'}
+                      </button>
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => !isJoined && setJoinTarget(group)}
-                    disabled={isJoined}
-                    className={`flex-shrink-0 text-sm font-semibold px-4 py-2 rounded-xl transition ${
-                      isJoined ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'
-                    }`}
-                  >
-                    {isJoined ? 'Joined' : 'Join'}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
 
