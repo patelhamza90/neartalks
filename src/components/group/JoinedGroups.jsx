@@ -1,7 +1,7 @@
 // src/components/group/JoinedGroups.jsx
 import React, { useState, useEffect } from 'react';
 import { db } from '../../firebase';
-import { collection, onSnapshot, doc, getDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, getDoc, query, orderBy, where, getDocs } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
 import SearchBar from '../ui/SearchBar';
 
@@ -10,37 +10,67 @@ export default function JoinedGroups({ onSelectGroup, activeGroupId }) {
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [unreadCounts, setUnreadCounts] = useState({});
 
+  // Main groups listener
   useEffect(() => {
     const q = collection(db, 'users', user.uid, 'joinedGroups');
     const unsub = onSnapshot(q, async (snap) => {
-      const groupIds = snap.docs.map((d) => d.id);
+      const joinedDocs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
       const fetched = await Promise.all(
-        groupIds.map(async (id) => {
+        joinedDocs.map(async (jd) => {
           try {
-            const groupDoc = await getDoc(doc(db, 'groups', id));
+            const groupDoc = await getDoc(doc(db, 'groups', jd.id));
             if (!groupDoc.exists()) return null;
             const data = groupDoc.data();
             return {
-              id,
+              id: jd.id,
               name: data.name || 'Unknown Group',
               avatar: data.avatar || '',
               memberCount: data.memberCount || 0,
               lastMessage: data.lastMessage || '',
               updatedAt: data.updatedAt,
+              lastSeen: jd.lastSeen || null,
             };
           } catch { return null; }
         })
       );
+
       const valid = fetched
         .filter(Boolean)
         .sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
+
       setGroups(valid);
       setLoading(false);
+
+      // Calculate unread counts
+      const counts = {};
+      await Promise.all(
+        valid.map(async (g) => {
+          try {
+            if (!g.lastSeen) {
+              // Never opened — count all messages
+              const msgsSnap = await getDocs(collection(db, 'groups', g.id, 'messages'));
+              counts[g.id] = msgsSnap.size;
+            } else {
+              const msgsQuery = query(
+                collection(db, 'groups', g.id, 'messages'),
+                where('createdAt', '>', g.lastSeen)
+              );
+              const msgsSnap = await getDocs(msgsQuery);
+              // Exclude own messages from unread
+              counts[g.id] = msgsSnap.docs.filter((d) => d.data().senderId !== user.uid).length;
+            }
+          } catch { counts[g.id] = 0; }
+        })
+      );
+      setUnreadCounts(counts);
     });
     return unsub;
   }, [user.uid]);
 
+  // Real-time group updates (lastMessage, memberCount)
   useEffect(() => {
     if (groups.length === 0) return;
     const unsubscribers = groups.map((g) =>
@@ -58,6 +88,12 @@ export default function JoinedGroups({ onSelectGroup, activeGroupId }) {
     );
     return () => unsubscribers.forEach((u) => u());
   }, [groups.map((g) => g.id).join(',')]);
+
+  const handleSelect = (group) => {
+    // Clear unread badge immediately on click
+    setUnreadCounts((prev) => ({ ...prev, [group.id]: 0 }));
+    onSelectGroup(group);
+  };
 
   const filteredGroups = searchQuery.trim()
     ? groups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -95,24 +131,42 @@ export default function JoinedGroups({ onSelectGroup, activeGroupId }) {
             <p className="text-sm font-medium text-gray-600">No matches for "{searchQuery}"</p>
           </div>
         )}
-        {filteredGroups.map((group) => (
-          <button
-            key={group.id}
-            onClick={() => onSelectGroup(group)}
-            className={`w-full flex items-center gap-3 p-4 hover:bg-gray-50 transition text-left ${activeGroupId === group.id ? 'bg-blue-50' : ''}`}
-          >
-            <img
-              src={group.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${group.id}`}
-              alt="" className="w-12 h-12 rounded-full bg-gray-100 flex-shrink-0"
-            />
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-gray-800 truncate">{group.name}</p>
-              <p className="text-xs text-gray-500">{group.memberCount} member{group.memberCount !== 1 ? 's' : ''}</p>
-              {group.lastMessage && <p className="text-xs text-gray-400 truncate mt-0.5">{group.lastMessage}</p>}
-            </div>
-            {activeGroupId === group.id && <div className="w-2 h-2 rounded-full bg-blue-600 flex-shrink-0" />}
-          </button>
-        ))}
+        {filteredGroups.map((group) => {
+          const unread = unreadCounts[group.id] || 0;
+          return (
+            <button
+              key={group.id}
+              onClick={() => handleSelect(group)}
+              className={`w-full flex items-center gap-3 p-4 hover:bg-gray-50 transition text-left ${
+                activeGroupId === group.id ? 'bg-blue-50' : ''
+              }`}
+            >
+              <div className="relative flex-shrink-0">
+                <img
+                  src={group.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${group.id}`}
+                  alt="" className="w-12 h-12 rounded-full bg-gray-100"
+                />
+                {unread > 0 && activeGroupId !== group.id && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] bg-blue-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className={`font-semibold truncate ${unread > 0 && activeGroupId !== group.id ? 'text-gray-900' : 'text-gray-700'}`}>
+                  {group.name}
+                </p>
+                <p className="text-xs text-gray-500">{group.memberCount} member{group.memberCount !== 1 ? 's' : ''}</p>
+                {group.lastMessage && (
+                  <p className={`text-xs truncate mt-0.5 ${unread > 0 && activeGroupId !== group.id ? 'text-gray-600 font-medium' : 'text-gray-400'}`}>
+                    {group.lastMessage}
+                  </p>
+                )}
+              </div>
+              {activeGroupId === group.id && <div className="w-2 h-2 rounded-full bg-blue-600 flex-shrink-0" />}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
