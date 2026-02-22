@@ -11,7 +11,6 @@ const RADIUS_KM = 5;
 
 export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
   const { user } = useAuth();
-  const [allGroups, setAllGroups] = useState([]);
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [locationStatus, setLocationStatus] = useState('loading');
@@ -19,7 +18,6 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
   const [joinTarget, setJoinTarget] = useState(null);
   const [joinedIds, setJoinedIds] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
-  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     initLocation();
@@ -44,12 +42,17 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
       const snap = await getDocs(collection(db, 'groups'));
       const all = snap.docs.map((d) => {
         const data = d.data();
-        const lat = typeof data.latitude === 'number' ? data.latitude : parseFloat(data.latitude) || 0;
-        const lng = typeof data.longitude === 'number' ? data.longitude : parseFloat(data.longitude) || 0;
+
+        // Safely parse lat/lng — skip group if either is missing/invalid
+        const lat = parseFloat(data.latitude);
+        const lng = parseFloat(data.longitude);
+        if (isNaN(lat) || isNaN(lng) || data.latitude === null || data.longitude === null) return null;
+
         let distance = null;
-        if (loc && loc.latitude !== 0) {
+        if (loc && loc.latitude !== 0 && loc.longitude !== 0) {
           distance = haversineDistance(loc.latitude, loc.longitude, lat, lng);
         }
+
         return {
           id: d.id,
           name: data.name || 'Unnamed Group',
@@ -57,16 +60,18 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
           latitude: lat,
           longitude: lng,
           memberCount: data.memberCount || 0,
-          lastMessage: data.lastMessage || '',
           distance,
         };
-      });
+      }).filter(Boolean);
 
       const nearby = all
-        .filter((g) => showAll || !loc || loc.latitude === 0 || g.distance === null || g.distance <= RADIUS_KM)
+        .filter((g) => {
+          if (!loc || loc.latitude === 0) return true;
+          if (g.distance === null) return false;
+          return g.distance <= RADIUS_KM;
+        })
         .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
 
-      setAllGroups(all);
       setGroups(nearby);
     } catch (e) {
       console.error(e);
@@ -75,49 +80,27 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
     }
   };
 
-  // Filter by search query on top of distance-filtered groups
   const filteredGroups = searchQuery.trim()
-    ? (showAll ? allGroups : groups).filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
-    : (showAll ? allGroups : groups);
+    ? groups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    : groups;
 
   const handleJoinSuccess = (group, nickname) => {
     setJoinTarget(null);
     onGroupJoined({ ...group, nickname });
   };
 
-  const toggleShowAll = () => {
-    const next = !showAll;
-    setShowAll(next);
-    if (next) {
-      setGroups(allGroups);
-    } else if (userLoc) {
-      const nearby = allGroups.filter((g) => !userLoc || userLoc.latitude === 0 || g.distance === null || g.distance <= RADIUS_KM);
-      setGroups(nearby);
-    }
-  };
-
   return (
     <div className="flex flex-col h-full">
       <div className="p-4 border-b bg-white sticky top-0 z-10 space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-gray-800">Discover Groups</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {locationStatus === 'success' && userLoc
-                ? `Within ${RADIUS_KM}km${userLoc.isIPBased ? ' (approx)' : ''}`
-                : locationStatus === 'loading'
-                ? 'Getting location...'
-                : 'Location unavailable'}
-            </p>
-          </div>
-          {allGroups.length > 0 && userLoc && userLoc.latitude !== 0 && (
-            <button
-              onClick={toggleShowAll}
-              className="text-xs text-blue-600 font-semibold border border-blue-200 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition"
-            >
-              {showAll ? `Near me` : 'Show all'}
-            </button>
-          )}
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">Discover Groups</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {locationStatus === 'success' && userLoc
+              ? `Within ${RADIUS_KM}km${userLoc.isIPBased ? ' (approx)' : ''}`
+              : locationStatus === 'loading'
+              ? 'Getting location...'
+              : 'Location unavailable'}
+          </p>
         </div>
         <SearchBar
           value={searchQuery}
@@ -156,7 +139,8 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
                 <div key={group.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 transition">
                   <img
                     src={group.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${group.id}`}
-                    alt="" className="w-12 h-12 rounded-full bg-gray-100 flex-shrink-0"
+                    alt=""
+                    className="w-12 h-12 rounded-full bg-gray-100 flex-shrink-0"
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
@@ -167,8 +151,9 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
                         <span className="text-xs text-gray-400 flex-shrink-0">{group.distance.toFixed(1)} km</span>
                       )}
                     </div>
-                    <p className="text-xs text-gray-500 mt-0.5">{group.memberCount} member{group.memberCount !== 1 ? 's' : ''}</p>
-                    {group.lastMessage && <p className="text-xs text-gray-400 truncate mt-0.5">{group.lastMessage}</p>}
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
+                    </p>
                   </div>
                   <button
                     onClick={() => !isJoined && setJoinTarget(group)}
