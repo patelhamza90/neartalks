@@ -40,9 +40,9 @@ function AppContent() {
   if (!user) return <Login />;
 
   const handleGroupCreated = (group) => { setActiveGroup(group); setTab('chats'); setShowChat(true); };
-  const handleGroupJoined  = (group) => { setActiveGroup(group); setTab('chats'); setShowChat(true); };
-  const handleSelectGroup  = (group) => { setActiveGroup(group); setShowChat(true); };
-  const handleBack         = ()      => setShowChat(false);
+  const handleGroupJoined = (group) => { setActiveGroup(group); setTab('chats'); setShowChat(true); };
+  const handleSelectGroup = (group) => { setActiveGroup(group); setShowChat(true); };
+  const handleBack = () => setShowChat(false);
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-gray-50">
@@ -53,13 +53,13 @@ function AppContent() {
         <div className="flex items-center gap-2.5 flex-shrink-0">
           <div className="w-8 h-8 flex-shrink-0">
             <svg viewBox="0 0 32 32" fill="none" className="w-8 h-8">
-              <rect x="2" y="2" width="22" height="16" rx="5" fill="#2563EB"/>
-              <path d="M8 18 L5 24 L14 18" fill="#2563EB"/>
-              <rect x="8" y="10" width="22" height="16" rx="5" fill="#1D4ED8"/>
-              <path d="M22 26 L30 30 L26 22" fill="#1D4ED8"/>
-              <circle cx="15" cy="18" r="1.5" fill="white" fillOpacity="0.9"/>
-              <circle cx="19" cy="18" r="1.5" fill="white" fillOpacity="0.9"/>
-              <circle cx="23" cy="18" r="1.5" fill="white" fillOpacity="0.9"/>
+              <rect x="2" y="2" width="22" height="16" rx="5" fill="#2563EB" />
+              <path d="M8 18 L5 24 L14 18" fill="#2563EB" />
+              <rect x="8" y="10" width="22" height="16" rx="5" fill="#1D4ED8" />
+              <path d="M22 26 L30 30 L26 22" fill="#1D4ED8" />
+              <circle cx="15" cy="18" r="1.5" fill="white" fillOpacity="0.9" />
+              <circle cx="19" cy="18" r="1.5" fill="white" fillOpacity="0.9" />
+              <circle cx="23" cy="18" r="1.5" fill="white" fillOpacity="0.9" />
             </svg>
           </div>
           <div className="hidden sm:flex flex-col leading-none">
@@ -109,18 +109,17 @@ function AppContent() {
           {/* Tab Bar */}
           <div className="flex items-center gap-1 px-3 py-2.5 bg-white border-b flex-shrink-0">
             {[
-              { key: 'chats',    label: 'Chats',    icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M21 16c0 1.1-.9 2-2 2H7l-4 4V6c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v10z"/></svg> },
-              { key: 'discover', label: 'Discover', icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg> },
-              { key: 'create',   label: 'Create',   icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4"/></svg> },
+              { key: 'chats', label: 'Chats', icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M21 16c0 1.1-.9 2-2 2H7l-4 4V6c0-1.1.9-2 2-2h14c1.1 0 2 .9 2 2v10z" /></svg> },
+              { key: 'discover', label: 'Discover', icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" /></svg> },
+              { key: 'create', label: 'Create', icon: <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg> },
             ].map((t) => (
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-semibold transition-all duration-200 ${
-                  tab === t.key
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-semibold transition-all duration-200 ${tab === t.key
                     ? 'bg-blue-600 text-white shadow-sm'
                     : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'
-                }`}
+                  }`}
               >
                 <span className={`transition-transform duration-200 ${tab === t.key ? 'scale-110' : ''}`}>{t.icon}</span>
                 <span>{t.label}</span>
@@ -130,9 +129,9 @@ function AppContent() {
 
           {/* Tab Content */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
-            {tab === 'chats'    && <JoinedGroups onSelectGroup={handleSelectGroup} activeGroupId={activeGroup?.id} />}
+            {tab === 'chats' && <JoinedGroups onSelectGroup={handleSelectGroup} activeGroupId={activeGroup?.id} />}
             {tab === 'discover' && <DiscoverGroups onGroupJoined={handleGroupJoined} onLocationReady={setUserLocation} />}
-            {tab === 'create'   && <CreateGroup onGroupCreated={handleGroupCreated} onCancel={() => setTab('chats')} />}
+            {tab === 'create' && <CreateGroup onGroupCreated={handleGroupCreated} onCancel={() => setTab('chats')} />}
           </div>
         </div>
 

@@ -7,6 +7,8 @@ import {
 } from 'firebase/firestore';
 import { useAuth } from '../../contexts/AuthContext';
 
+const MAX_IMAGE_SIZE = 1024 * 1024; // 1MB
+
 // ── Group Info Modal ──────────────────────────────────────────────────────────
 function GroupInfoModal({ group, onClose, onLeave }) {
   const [members, setMembers] = useState([]);
@@ -83,6 +85,31 @@ function GroupInfoModal({ group, onClose, onLeave }) {
   );
 }
 
+// ── Image Preview Modal ───────────────────────────────────────────────────────
+function ImagePreviewModal({ src, onClose }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4"
+      onClick={onClose}
+    >
+      <img
+        src={src}
+        alt="Full size"
+        className="max-w-full max-h-[90vh] rounded-xl object-contain"
+        onClick={(e) => e.stopPropagation()}
+      />
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/30 rounded-full transition"
+      >
+        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 // ── Main ChatWindow ───────────────────────────────────────────────────────────
 export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const { user } = useAuth();
@@ -99,17 +126,21 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const [typingUsers, setTypingUsers] = useState([]);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [hoveredMsg, setHoveredMsg] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [pendingImage, setPendingImage] = useState(null);
+  const [imageError, setImageError] = useState(false);
 
   const bottomRef = useRef(null);
   const msgAreaRef = useRef(null);
   const inputRef = useRef(null);
   const searchRef = useRef(null);
+  const fileInputRef = useRef(null);
   const matchRefs = useRef([]);
   const typingTimerRef = useRef(null);
-  const isUserScrollingRef = useRef(false);
+  const errorTimerRef = useRef(null);
   const prevMsgCountRef = useRef(0);
 
-  // Fetch nickname
   useEffect(() => {
     if (!group?.id) return;
     getDoc(doc(db, 'groups', group.id, 'members', user.uid)).then((snap) => {
@@ -117,7 +148,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     });
   }, [group?.id, user.uid]);
 
-  // Messages listener
   useEffect(() => {
     if (!group?.id) return;
     const q = query(collection(db, 'groups', group.id, 'messages'), orderBy('createdAt', 'asc'));
@@ -127,29 +157,23 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     return unsub;
   }, [group?.id]);
 
-  // Smart auto-scroll: only scroll if user is near bottom or new message is own
   useEffect(() => {
     if (searchQuery) return;
     const area = msgAreaRef.current;
     if (!area) return;
-
     const newCount = messages.length;
     const added = newCount > prevMsgCountRef.current;
     prevMsgCountRef.current = newCount;
-
     if (!added) return;
-
     const lastMsg = messages[messages.length - 1];
     const isOwnMessage = lastMsg?.senderId === user.uid;
     const distFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
     const nearBottom = distFromBottom < 120;
-
     if (isOwnMessage || nearBottom) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, searchQuery]);
 
-  // Update lastSeen when opening group
   useEffect(() => {
     if (!group?.id || !user?.uid) return;
     setDoc(
@@ -159,7 +183,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     ).catch(() => {});
   }, [group?.id, user?.uid]);
 
-  // Typing indicator listener
   useEffect(() => {
     if (!group?.id) return;
     const unsub = onSnapshot(collection(db, 'groups', group.id, 'typing'), (snap) => {
@@ -171,7 +194,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     return unsub;
   }, [group?.id, user.uid]);
 
-  // Search scroll to match
   useEffect(() => {
     if (searchQuery && matchRefs.current[matchIndex]) {
       matchRefs.current[matchIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -183,7 +205,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     else { setSearchQuery(''); setMatchIndex(0); }
   }, [showSearch]);
 
-  // Typing indicator logic
   const setTyping = useCallback(async (isTyping) => {
     if (!group?.id) return;
     try {
@@ -209,33 +230,89 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   useEffect(() => {
     return () => {
       clearTimeout(typingTimerRef.current);
+      clearTimeout(errorTimerRef.current);
       if (group?.id) {
         setDoc(doc(db, 'groups', group.id, 'typing', user.uid), { typing: false, nickname: '' }).catch(() => {});
       }
     };
   }, [group?.id]);
 
+  const showImageError = (msg) => {
+    setImageError(msg);
+    clearTimeout(errorTimerRef.current);
+    errorTimerRef.current = setTimeout(() => setImageError(false), 3000);
+  };
+
+  const handleImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showImageError('Only image files are allowed.');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE) {
+      showImageError('Image must be less than 1MB');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const base64 = ev.target.result;
+      setPendingImage({ base64, mimeType: file.type });
+      setImagePreview(base64);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const cancelPendingImage = () => {
+    setPendingImage(null);
+    setImagePreview(null);
+  };
+
   const sendMessage = async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    const hasImage = !!pendingImage;
+    const hasText = !!trimmed;
+    if ((!hasText && !hasImage) || sending) return;
+
     setSending(true);
     setText('');
+    const imageData = pendingImage;
+    setPendingImage(null);
+    setImagePreview(null);
     clearTimeout(typingTimerRef.current);
     setTyping(false);
+
     try {
-      await addDoc(collection(db, 'groups', group.id, 'messages'), {
-        text: trimmed,
-        senderId: user.uid,
-        senderName: nickname || 'Anonymous',
-        createdAt: serverTimestamp(),
-      });
+      if (hasImage) {
+        await addDoc(collection(db, 'groups', group.id, 'messages'), {
+          mediaBase64: imageData.base64,
+          mediaType: 'image',
+          senderId: user.uid,
+          senderName: nickname || 'Anonymous',
+          createdAt: serverTimestamp(),
+        });
+      }
+      if (hasText) {
+        await addDoc(collection(db, 'groups', group.id, 'messages'), {
+          text: trimmed,
+          senderId: user.uid,
+          senderName: nickname || 'Anonymous',
+          createdAt: serverTimestamp(),
+        });
+      }
       await updateDoc(doc(db, 'groups', group.id), {
-        lastMessage: trimmed.length > 60 ? trimmed.slice(0, 60) + '…' : trimmed,
+        lastMessage: hasText
+          ? (trimmed.length > 60 ? trimmed.slice(0, 60) + '…' : trimmed)
+          : '📷 Image',
         updatedAt: serverTimestamp(),
       });
     } catch (e) {
       console.error(e);
-      setText(trimmed);
+      if (hasText) setText(trimmed);
+      if (hasImage) { setPendingImage(imageData); setImagePreview(imageData.base64); }
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -305,7 +382,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     );
   }
 
-  // ── Empty State ──
   if (!group) {
     return (
       <div className="flex flex-col items-center justify-center h-full w-full overflow-hidden bg-gray-50 select-none px-6">
@@ -329,7 +405,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     );
   }
 
-  // ── Chat Layout ──
   return (
     <div className="flex flex-col h-full w-full max-w-full overflow-hidden bg-gray-50">
 
@@ -418,7 +493,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         </div>
       )}
 
-      {/* ── Scrollable Messages Area ── */}
+      {/* Scrollable Messages Area */}
       <div
         ref={msgAreaRef}
         className="flex-1 overflow-y-auto overflow-x-hidden w-full"
@@ -435,6 +510,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
             const isMatch = q && msg.text?.toLowerCase().includes(q);
             const matchPos = matchedIds.indexOf(i);
             const isCurrentMatch = isMatch && matchedIds[matchIndex] === i;
+            const isImage = msg.mediaType === 'image' && msg.mediaBase64;
 
             return (
               <div
@@ -448,7 +524,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
                   <span className="text-xs font-semibold text-gray-500 mb-1 ml-1">{msg.senderName}</span>
                 )}
                 <div className="flex items-end gap-1.5 max-w-[90%] sm:max-w-[75%]">
-                  {/* Delete button — own messages only */}
                   {isMe && (
                     <div className={`transition-opacity duration-150 flex-shrink-0 ${hoveredMsg === msg.id ? 'opacity-100' : 'opacity-0'}`}>
                       <button
@@ -464,24 +539,41 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
                       </button>
                     </div>
                   )}
-
-                  {/* Bubble */}
                   <div
-                    className={`min-w-0 px-3.5 py-2 rounded-2xl text-sm transition-all ${
+                    className={`min-w-0 overflow-hidden rounded-2xl text-sm transition-all ${
                       isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''
                     } ${
-                      isMe
-                        ? 'bg-blue-600 text-white rounded-br-sm'
-                        : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm'
+                      isImage
+                        ? 'bg-transparent p-0'
+                        : isMe
+                          ? 'bg-blue-600 text-white rounded-br-sm px-3.5 py-2'
+                          : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm px-3.5 py-2'
                     }`}
                   >
-                    <p className="break-words whitespace-pre-wrap" style={{ overflowWrap: 'anywhere' }}>
-                      {q ? highlightText(msg.text || '', q) : msg.text}
-                    </p>
-                    {/* Time inside bubble aligned right */}
-                    <p className={`text-[10px] mt-0.5 text-right leading-none select-none ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>
-                      {formatTime(msg.createdAt)}
-                    </p>
+                    {isImage ? (
+                      <div className={`overflow-hidden rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'}`}>
+                        <img
+                          src={msg.mediaBase64}
+                          alt="Shared image"
+                          className="block max-w-full w-auto h-auto max-h-72 object-cover cursor-pointer hover:opacity-95 transition"
+                          style={{ maxWidth: '100%' }}
+                          onClick={() => setPreviewImage(msg.mediaBase64)}
+                          loading="lazy"
+                        />
+                        <div className={`px-2 py-1 text-[10px] text-right select-none ${isMe ? 'bg-blue-600 text-blue-200' : 'bg-white text-gray-400'}`}>
+                          {formatTime(msg.createdAt)}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="break-words whitespace-pre-wrap" style={{ overflowWrap: 'anywhere' }}>
+                          {q ? highlightText(msg.text || '', q) : msg.text}
+                        </p>
+                        <p className={`text-[10px] mt-0.5 text-right leading-none select-none ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>
+                          {formatTime(msg.createdAt)}
+                        </p>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -507,9 +599,62 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         </div>
       )}
 
-      {/* ── Input Area ── */}
+      {/* Image Upload Preview */}
+      {imagePreview && (
+        <div className="flex-shrink-0 px-4 pt-3 pb-1 bg-white border-t">
+          <div className="relative inline-block">
+            <img
+              src={imagePreview}
+              alt="Preview"
+              className="h-24 w-auto max-w-[200px] rounded-xl object-cover border border-gray-200"
+            />
+            <button
+              onClick={cancelPendingImage}
+              className="absolute -top-2 -right-2 w-5 h-5 bg-gray-700 hover:bg-gray-900 text-white rounded-full flex items-center justify-center transition"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">Press send to share this image</p>
+        </div>
+      )}
+
+      {/* Inline Image Error */}
+      {imageError && (
+        <div
+          className="flex-shrink-0 mx-4 mb-0 mt-0 flex items-center gap-2 bg-red-50 border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm transition-opacity duration-300"
+          style={{ opacity: imageError ? 1 : 0 }}
+        >
+          <svg className="w-4 h-4 flex-shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span>{imageError}</span>
+        </div>
+      )}
+
+      {/* Input Area */}
       <div className="flex-shrink-0 w-full px-4 py-3 bg-white border-t">
-        <div className="flex items-center gap-2 w-full bg-gray-50 border border-gray-200 rounded-full px-4 py-2.5 shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent transition">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleImageSelect}
+        />
+        <div className="flex items-center gap-2 w-full bg-gray-50 border border-gray-200 rounded-full px-3 py-2.5 shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent transition">
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending}
+            className="flex-shrink-0 p-1 text-gray-400 hover:text-blue-500 transition disabled:opacity-40"
+            title="Share image"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </button>
           <input
             ref={inputRef}
             type="text"
@@ -522,12 +667,19 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
           />
           <button
             onClick={sendMessage}
-            disabled={!text.trim() || sending}
+            disabled={(!text.trim() && !pendingImage) || sending}
             className="flex-shrink-0 w-8 h-8 flex items-center justify-center bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-full transition"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
+            {sending ? (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+              </svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              </svg>
+            )}
           </button>
         </div>
       </div>
@@ -566,7 +718,9 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
             <h3 className="text-base font-bold text-gray-800 mb-2">Delete Message</h3>
             <p className="text-sm text-gray-500 mb-2">Are you sure you want to delete this message?</p>
             <div className="bg-gray-50 rounded-xl px-3 py-2 mb-5 overflow-hidden">
-              <p className="text-sm text-gray-700 truncate">{deleteTarget.text}</p>
+              <p className="text-sm text-gray-700 truncate">
+                {deleteTarget.mediaType === 'image' ? '📷 Image' : deleteTarget.text}
+              </p>
             </div>
             <div className="flex gap-3">
               <button onClick={() => setDeleteTarget(null)}
@@ -589,6 +743,11 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
           onClose={() => setShowGroupInfo(false)}
           onLeave={() => { setShowGroupInfo(false); setShowLeaveModal(true); }}
         />
+      )}
+
+      {/* Full-size Image Preview */}
+      {previewImage && (
+        <ImagePreviewModal src={previewImage} onClose={() => setPreviewImage(null)} />
       )}
     </div>
   );
