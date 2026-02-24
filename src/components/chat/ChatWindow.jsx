@@ -127,8 +127,8 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [hoveredMsg, setHoveredMsg] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
-  const [pendingImage, setPendingImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null); // pending upload preview
+  const [pendingImage, setPendingImage] = useState(null); // { base64, mimeType }
   const [imageError, setImageError] = useState(false);
 
   const bottomRef = useRef(null);
@@ -139,7 +139,6 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const matchRefs = useRef([]);
   const typingTimerRef = useRef(null);
   const errorTimerRef = useRef(null);
-  const prevMsgCountRef = useRef(0);
 
   // Fetch nickname
   useEffect(() => {
@@ -159,37 +158,16 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     return unsub;
   }, [group?.id]);
 
-  // Instant scroll to bottom on mount / group switch
+  // Auto-scroll to bottom on messages change or group switch
   useEffect(() => {
     if (!group?.id) return;
-    prevMsgCountRef.current = 0;
-    const t = setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-    }, 50);
-    return () => clearTimeout(t);
-  }, [group?.id]);
-
-  // Smart auto-scroll on new messages
-  useEffect(() => {
-    if (searchQuery) return;
-    const area = msgAreaRef.current;
-    if (!area) return;
-
-    const newCount = messages.length;
-    const added = newCount > prevMsgCountRef.current;
-    prevMsgCountRef.current = newCount;
-
-    if (!added) return;
-
-    const lastMsg = messages[messages.length - 1];
-    const isOwnMessage = lastMsg?.senderId === user.uid;
-    const distFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
-    const nearBottom = distFromBottom < 120;
-
-    if (isOwnMessage || nearBottom) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, searchQuery]);
+    const timer = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({
+        behavior: messages.length > 0 ? 'smooth' : 'auto',
+      });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [messages, group?.id]);
 
   // Update lastSeen
   useEffect(() => {
@@ -198,7 +176,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
       doc(db, 'users', user.uid, 'joinedGroups', group.id),
       { lastSeen: serverTimestamp() },
       { merge: true }
-    ).catch(() => {});
+    ).catch(() => { });
   }, [group?.id, user?.uid]);
 
   // Typing indicator listener
@@ -233,7 +211,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         typing: isTyping,
         nickname: nickname || 'Someone',
       });
-    } catch {}
+    } catch { }
   }, [group?.id, user.uid, nickname]);
 
   const handleTextChange = (e) => {
@@ -251,9 +229,8 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   useEffect(() => {
     return () => {
       clearTimeout(typingTimerRef.current);
-      clearTimeout(errorTimerRef.current);
       if (group?.id) {
-        setDoc(doc(db, 'groups', group.id, 'typing', user.uid), { typing: false, nickname: '' }).catch(() => {});
+        setDoc(doc(db, 'groups', group.id, 'typing', user.uid), { typing: false, nickname: '' }).catch(() => { });
       }
     };
   }, [group?.id]);
@@ -268,16 +245,21 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const handleImageSelect = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Validate type
     if (!file.type.startsWith('image/')) {
       showImageError('Only image files are allowed.');
       e.target.value = '';
       return;
     }
+
+    // Validate size
     if (file.size > MAX_IMAGE_SIZE) {
       showImageError('Image must be less than 1MB');
       e.target.value = '';
       return;
     }
+
     const reader = new FileReader();
     reader.onload = (ev) => {
       const base64 = ev.target.result;
@@ -291,6 +273,37 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const cancelPendingImage = () => {
     setPendingImage(null);
     setImagePreview(null);
+  };
+
+  const sendImage = async () => {
+    if (!pendingImage || sending) return;
+    setSending(true);
+    const { base64 } = pendingImage;
+    setPendingImage(null);
+    setImagePreview(null);
+    clearTimeout(typingTimerRef.current);
+    setTyping(false);
+    try {
+      await addDoc(collection(db, 'groups', group.id, 'messages'), {
+        mediaBase64: base64,
+        mediaType: 'image',
+        senderId: user.uid,
+        senderName: nickname || 'Anonymous',
+        createdAt: serverTimestamp(),
+      });
+      await updateDoc(doc(db, 'groups', group.id), {
+        lastMessage: '📷 Image',
+        updatedAt: serverTimestamp(),
+      });
+    } catch (e) {
+      console.error(e);
+      // restore pending on failure
+      setPendingImage({ base64, mimeType: 'image' });
+      setImagePreview(base64);
+    } finally {
+      setSending(false);
+      inputRef.current?.focus();
+    }
   };
 
   // ── Send message (text, image, or both) ──────────────────────────────────
@@ -309,6 +322,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     setTyping(false);
 
     try {
+      // Send image first if present
       if (hasImage) {
         await addDoc(collection(db, 'groups', group.id, 'messages'), {
           mediaBase64: imageData.base64,
@@ -318,6 +332,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
           createdAt: serverTimestamp(),
         });
       }
+      // Send text if present
       if (hasText) {
         await addDoc(collection(db, 'groups', group.id, 'messages'), {
           text: trimmed,
@@ -371,6 +386,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    if (e.key === 'Escape' && pendingImage) cancelPendingImage();
   };
 
   const formatTime = (ts) => {
@@ -403,7 +419,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     );
   }
 
-  // ── Empty State ──
+  // ── Empty state ──
   if (!group) {
     return (
       <div className="flex flex-col items-center justify-center h-full w-full overflow-hidden bg-gray-50 select-none px-6">
@@ -516,7 +532,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         </div>
       )}
 
-      {/* Scrollable Messages Area */}
+      {/* ── Scrollable Messages Area ── */}
       <div
         ref={msgAreaRef}
         className="flex-1 overflow-y-auto overflow-x-hidden w-full"
@@ -547,6 +563,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
                   <span className="text-xs font-semibold text-gray-500 mb-1 ml-1">{msg.senderName}</span>
                 )}
                 <div className="flex items-end gap-1.5 max-w-[90%] sm:max-w-[75%]">
+                  {/* Delete button - own messages only */}
                   {isMe && (
                     <div className={`transition-opacity duration-150 flex-shrink-0 ${hoveredMsg === msg.id ? 'opacity-100' : 'opacity-0'}`}>
                       <button
@@ -563,23 +580,23 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
                     </div>
                   )}
 
+                  {/* Bubble */}
                   {isImage ? (
-                    // Image message — clean, no background bubble
-                    <div
-                      className={`relative min-w-0 overflow-hidden ${
-                        isMe ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'
-                      } ${isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''}`}
-                    >
+                    // Image message — WhatsApp style
+                    <div className="relative inline-block max-w-full">
                       <img
                         src={msg.mediaBase64}
                         alt="Shared image"
-                        className="block max-w-full w-auto h-auto max-h-72 object-cover cursor-pointer hover:opacity-95 transition"
-                        style={{ maxWidth: '100%', display: 'block' }}
+                        className="block max-w-full h-auto max-h-72 rounded-2xl cursor-pointer"
                         onClick={() => setPreviewImage(msg.mediaBase64)}
                         loading="lazy"
                       />
+                      {/* WhatsApp style bottom gradient */}
+                      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/70 to-transparent rounded-b-2xl pointer-events-none" />
+                      {/* Time */}
                       <span
-                        className="absolute bottom-1.5 right-2 text-xs text-[rgb(186 181 181)] opacity-80 select-none pointer-events-none"
+                        className="absolute bottom-1 right-2 text-[11px] text-white font-medium z-10 select-none"
+                        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.8)' }}
                       >
                         {formatTime(msg.createdAt)}
                       </span>
@@ -587,13 +604,11 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
                   ) : (
                     // Text message — unchanged
                     <div
-                      className={`min-w-0 overflow-hidden rounded-2xl text-sm transition-all ${
-                        isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''
-                      } ${
-                        isMe
+                      className={`min-w-0 overflow-hidden rounded-2xl text-sm transition-all ${isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''
+                        } ${isMe
                           ? 'bg-blue-600 text-white rounded-br-sm px-3.5 py-2'
                           : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm px-3.5 py-2'
-                      }`}
+                        }`}
                     >
                       <p className="break-words whitespace-pre-wrap" style={{ overflowWrap: 'anywhere' }}>
                         {q ? highlightText(msg.text || '', q) : msg.text}
@@ -627,7 +642,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         </div>
       )}
 
-      {/* Image Upload Preview */}
+      {/* ── Image Upload Preview ── */}
       {imagePreview && (
         <div className="flex-shrink-0 px-4 pt-3 pb-1 bg-white border-t">
           <div className="relative inline-block">
@@ -649,7 +664,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         </div>
       )}
 
-      {/* Inline Image Error */}
+      {/* ── Inline Image Error ── */}
       {imageError && (
         <div
           className="flex-shrink-0 mx-4 mb-0 mt-0 flex items-center gap-2 bg-red-50 border border-red-300 text-red-600 rounded-lg px-4 py-2 text-sm transition-opacity duration-300"
@@ -662,8 +677,9 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         </div>
       )}
 
-      {/* Input Area */}
+      {/* ── Input Area ── */}
       <div className="flex-shrink-0 w-full px-4 py-3 bg-white border-t">
+        {/* Hidden file input */}
         <input
           ref={fileInputRef}
           type="file"
@@ -671,7 +687,9 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
           className="hidden"
           onChange={handleImageSelect}
         />
+
         <div className="flex items-center gap-2 w-full bg-gray-50 border border-gray-200 rounded-full px-3 py-2.5 shadow-sm focus-within:ring-2 focus-within:ring-blue-400 focus-within:border-transparent transition">
+          {/* Image upload button */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -683,6 +701,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
           </button>
+
           <input
             ref={inputRef}
             type="text"
@@ -693,6 +712,8 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
             className="flex-1 min-w-0 bg-transparent text-sm outline-none text-gray-800 placeholder-gray-400"
             maxLength={1000}
           />
+
+          {/* Send button */}
           <button
             onClick={sendMessage}
             disabled={(!text.trim() && !pendingImage) || sending}
@@ -700,8 +721,8 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
           >
             {sending ? (
               <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
               </svg>
             ) : (
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
