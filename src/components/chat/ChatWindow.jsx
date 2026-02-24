@@ -141,6 +141,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
   const errorTimerRef = useRef(null);
   const prevMsgCountRef = useRef(0);
 
+  // Fetch nickname
   useEffect(() => {
     if (!group?.id) return;
     getDoc(doc(db, 'groups', group.id, 'members', user.uid)).then((snap) => {
@@ -148,6 +149,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     });
   }, [group?.id, user.uid]);
 
+  // Messages listener
   useEffect(() => {
     if (!group?.id) return;
     const q = query(collection(db, 'groups', group.id, 'messages'), orderBy('createdAt', 'asc'));
@@ -157,23 +159,39 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     return unsub;
   }, [group?.id]);
 
+  // Instant scroll to bottom on mount / group switch
+  useEffect(() => {
+    if (!group?.id) return;
+    prevMsgCountRef.current = 0;
+    const t = setTimeout(() => {
+      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [group?.id]);
+
+  // Smart auto-scroll on new messages
   useEffect(() => {
     if (searchQuery) return;
     const area = msgAreaRef.current;
     if (!area) return;
+
     const newCount = messages.length;
     const added = newCount > prevMsgCountRef.current;
     prevMsgCountRef.current = newCount;
+
     if (!added) return;
+
     const lastMsg = messages[messages.length - 1];
     const isOwnMessage = lastMsg?.senderId === user.uid;
     const distFromBottom = area.scrollHeight - area.scrollTop - area.clientHeight;
     const nearBottom = distFromBottom < 120;
+
     if (isOwnMessage || nearBottom) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, searchQuery]);
 
+  // Update lastSeen
   useEffect(() => {
     if (!group?.id || !user?.uid) return;
     setDoc(
@@ -183,6 +201,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     ).catch(() => {});
   }, [group?.id, user?.uid]);
 
+  // Typing indicator listener
   useEffect(() => {
     if (!group?.id) return;
     const unsub = onSnapshot(collection(db, 'groups', group.id, 'typing'), (snap) => {
@@ -194,6 +213,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     return unsub;
   }, [group?.id, user.uid]);
 
+  // Search scroll
   useEffect(() => {
     if (searchQuery && matchRefs.current[matchIndex]) {
       matchRefs.current[matchIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -205,6 +225,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     else { setSearchQuery(''); setMatchIndex(0); }
   }, [showSearch]);
 
+  // Typing logic
   const setTyping = useCallback(async (isTyping) => {
     if (!group?.id) return;
     try {
@@ -237,6 +258,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     };
   }, [group?.id]);
 
+  // ── Image handling ────────────────────────────────────────────────────────
   const showImageError = (msg) => {
     setImageError(msg);
     clearTimeout(errorTimerRef.current);
@@ -271,6 +293,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     setImagePreview(null);
   };
 
+  // ── Send message (text, image, or both) ──────────────────────────────────
   const sendMessage = async () => {
     const trimmed = text.trim();
     const hasImage = !!pendingImage;
@@ -304,9 +327,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
         });
       }
       await updateDoc(doc(db, 'groups', group.id), {
-        lastMessage: hasText
-          ? (trimmed.length > 60 ? trimmed.slice(0, 60) + '…' : trimmed)
-          : '📷 Image',
+        lastMessage: hasText ? (trimmed.length > 60 ? trimmed.slice(0, 60) + '…' : trimmed) : '📷 Image',
         updatedAt: serverTimestamp(),
       });
     } catch (e) {
@@ -382,6 +403,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     );
   }
 
+  // ── Empty State ──
   if (!group) {
     return (
       <div className="flex flex-col items-center justify-center h-full w-full overflow-hidden bg-gray-50 select-none px-6">
@@ -405,6 +427,7 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
     );
   }
 
+  // ── Chat Layout ──
   return (
     <div className="flex flex-col h-full w-full max-w-full overflow-hidden bg-gray-50">
 
@@ -539,42 +562,47 @@ export default function ChatWindow({ group, onBack, onLeaveGroup }) {
                       </button>
                     </div>
                   )}
-                  <div
-                    className={`min-w-0 overflow-hidden rounded-2xl text-sm transition-all ${
-                      isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''
-                    } ${
-                      isImage
-                        ? 'bg-transparent p-0'
-                        : isMe
+
+                  {isImage ? (
+                    // Image message — clean, no background bubble
+                    <div
+                      className={`relative min-w-0 overflow-hidden ${
+                        isMe ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'
+                      } ${isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''}`}
+                    >
+                      <img
+                        src={msg.mediaBase64}
+                        alt="Shared image"
+                        className="block max-w-full w-auto h-auto max-h-72 object-cover cursor-pointer hover:opacity-95 transition"
+                        style={{ maxWidth: '100%', display: 'block' }}
+                        onClick={() => setPreviewImage(msg.mediaBase64)}
+                        loading="lazy"
+                      />
+                      <span
+                        className="absolute bottom-1.5 right-2 text-xs text-[rgb(186 181 181)] opacity-80 select-none pointer-events-none"
+                      >
+                        {formatTime(msg.createdAt)}
+                      </span>
+                    </div>
+                  ) : (
+                    // Text message — unchanged
+                    <div
+                      className={`min-w-0 overflow-hidden rounded-2xl text-sm transition-all ${
+                        isCurrentMatch ? 'ring-2 ring-yellow-400 ring-offset-1' : isMatch ? 'ring-1 ring-yellow-200' : ''
+                      } ${
+                        isMe
                           ? 'bg-blue-600 text-white rounded-br-sm px-3.5 py-2'
                           : 'bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm px-3.5 py-2'
-                    }`}
-                  >
-                    {isImage ? (
-                      <div className={`overflow-hidden rounded-2xl ${isMe ? 'rounded-br-sm' : 'rounded-bl-sm'}`}>
-                        <img
-                          src={msg.mediaBase64}
-                          alt="Shared image"
-                          className="block max-w-full w-auto h-auto max-h-72 object-cover cursor-pointer hover:opacity-95 transition"
-                          style={{ maxWidth: '100%' }}
-                          onClick={() => setPreviewImage(msg.mediaBase64)}
-                          loading="lazy"
-                        />
-                        <div className={`px-2 py-1 text-[10px] text-right select-none ${isMe ? 'bg-blue-600 text-blue-200' : 'bg-white text-gray-400'}`}>
-                          {formatTime(msg.createdAt)}
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <p className="break-words whitespace-pre-wrap" style={{ overflowWrap: 'anywhere' }}>
-                          {q ? highlightText(msg.text || '', q) : msg.text}
-                        </p>
-                        <p className={`text-[10px] mt-0.5 text-right leading-none select-none ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>
-                          {formatTime(msg.createdAt)}
-                        </p>
-                      </>
-                    )}
-                  </div>
+                      }`}
+                    >
+                      <p className="break-words whitespace-pre-wrap" style={{ overflowWrap: 'anywhere' }}>
+                        {q ? highlightText(msg.text || '', q) : msg.text}
+                      </p>
+                      <p className={`text-[10px] mt-0.5 text-right leading-none select-none ${isMe ? 'text-blue-200' : 'text-gray-400'}`}>
+                        {formatTime(msg.createdAt)}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             );
