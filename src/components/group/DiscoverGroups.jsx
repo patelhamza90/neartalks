@@ -87,14 +87,10 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
   };
 
   const groupsInDefault = allGroups.filter((g) => withinRadius(g, RADIUS_DEFAULT));
-  const groupsInExpanded = allGroups.filter((g) => withinRadius(g, RADIUS_EXPANDED));
-  const activeGroups = expanded ? groupsInExpanded : groupsInDefault;
+  const activeGroups = expanded ? allGroups : groupsInDefault;
 
-  const showExpandButton =
-    !expanded &&
-    groupsInDefault.length === 0 &&
-    groupsInExpanded.length > 0 &&
-    userLoc && userLoc.latitude !== 0;
+  // Show expand button always until user has expanded
+  const showExpandButton = !expanded && locationStatus === 'success';
 
   const filteredGroups = searchQuery.trim()
     ? activeGroups.filter((g) => g.name.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -114,8 +110,8 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
             {locationStatus === 'success' && userLoc
               ? `Within ${radius}km${userLoc.isIPBased ? ' (approx)' : ''}`
               : locationStatus === 'loading'
-              ? 'Getting location...'
-              : 'Location unavailable'}
+                ? 'Getting location...'
+                : 'Location unavailable'}
           </p>
         </div>
         <SearchBar
@@ -139,6 +135,7 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
           </div>
         ) : (
           <>
+            {/* No groups at all */}
             {filteredGroups.length === 0 && !showExpandButton && (
               <div className="text-center text-gray-400 mt-20 px-6">
                 <div className="text-4xl mb-3">{searchQuery ? '🔍' : '🏙️'}</div>
@@ -151,34 +148,23 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
               </div>
             )}
 
-            {showExpandButton && (
-              <div className="flex flex-col items-center mt-20 px-6 gap-4">
-                <div className="text-4xl">📡</div>
-                <p className="font-medium text-gray-600 text-center">No groups found within 5 km</p>
-                <p className="text-sm text-gray-400 text-center">There may be groups a bit further away.</p>
-                <button
-                  onClick={handleExpand}
-                  className="mt-2 text-sm font-semibold text-blue-600 border border-blue-300 bg-blue-50 hover:bg-blue-100 px-5 py-2.5 rounded-xl transition"
-                >
-                  Expand Search to 10 KM
-                </button>
-              </div>
-            )}
-
+            {/* No groups after expand */}
             {expanded && filteredGroups.length === 0 && !searchQuery && (
               <div className="text-center text-gray-400 mt-20 px-6">
                 <div className="text-4xl mb-3">🏙️</div>
-                <p className="font-medium text-gray-600">No groups within 10 km</p>
+                <p className="font-medium text-gray-600">No groups found</p>
                 <p className="text-sm mt-1">Be the first to create one!</p>
               </div>
             )}
 
-            {expanded && groupsInExpanded.length > 0 && !searchQuery && (
+            {/* Expanded notice */}
+            {expanded && filteredGroups.length > 0 && !searchQuery && (
               <div className="px-4 py-2 bg-blue-50 border-b border-blue-100">
-                <p className="text-xs text-blue-600 font-medium text-center">Showing results within 10 KM</p>
+                <p className="text-xs text-blue-600 font-medium text-center">Showing all results within 10 KM</p>
               </div>
             )}
 
+            {/* Groups list */}
             {filteredGroups.length > 0 && (
               <div className="divide-y divide-gray-100">
                 {filteredGroups.map((group) => {
@@ -195,9 +181,7 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
                           <p className="font-semibold text-gray-800 truncate">
                             {searchQuery ? highlightMatch(group.name, searchQuery) : group.name}
                           </p>
-                          {group.distance !== null && group.distance !== undefined && (
-                            <span className="text-xs text-gray-400 flex-shrink-0">{group.distance.toFixed(1)} km</span>
-                          )}
+                         
                         </div>
                         <p className="text-xs text-gray-500 mt-0.5">
                           {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
@@ -215,6 +199,18 @@ export default function DiscoverGroups({ onGroupJoined, onLocationReady }) {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Expand button — always below groups list */}
+            {showExpandButton && (
+              <div className="px-4 py-4 border-t border-gray-100">
+                <button
+                  onClick={handleExpand}
+                  className="w-full text-sm font-semibold text-blue-600 border border-blue-300 bg-blue-50 hover:bg-blue-100 px-5 py-2.5 rounded-xl transition"
+                >
+                  Expand Search to 10 KM
+                </button>
               </div>
             )}
           </>
