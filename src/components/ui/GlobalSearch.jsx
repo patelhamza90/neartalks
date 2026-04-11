@@ -155,13 +155,7 @@ export default function GlobalSearch({ userLocation, onSelectGroup, onGroupJoin,
           </p>
           <p className="text-xs text-gray-400 mt-0.5">
             {group.memberCount} member{group.memberCount !== 1 ? 's' : ''}
-            {group.distance !== null && group.distance !== undefined
-              ? ` · ${group.distance.toFixed(1)} km away`
-              : ''}
           </p>
-          {group.lastMessage && (
-            <p className="text-xs text-gray-400 truncate">{group.lastMessage}</p>
-          )}
         </div>
         <span
           className={`flex-shrink-0 text-xs font-semibold px-2.5 py-1 rounded-lg ${
